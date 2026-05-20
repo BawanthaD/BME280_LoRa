@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LoRa BME280 Live Dashboard</title>
+
+    <!-- MQTT over WebSocket Library -->
+    <script src="https://unpkg.com/paho-mqtt@1.1.0/paho-mqtt-min.js"></script>
+
+    <!-- Chart.js for plotting -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: Arial, sans-serif;
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            color: #e5e7eb;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .dashboard {
+            max-width: 1200px;
+            margin: auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .header h1 {
+            font-size: 30px;
+            color: #ffffff;
+        }
+
+        .header p {
+            color: #94a3b8;
+            margin-top: 5px;
+        }
+
+        .status-box {
+            padding: 12px 18px;
+            border-radius: 999px;
+            background: #334155;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #ef4444;
+        }
+
+        .dot.connected {
+            background: #22c55e;
+            box-shadow: 0 0 12px #22c55e;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 18px;
+            margin-bottom: 25px;
+        }
+
+        .card {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 18px;
+            padding: 22px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+            backdrop-filter: blur(12px);
+        }
+
+        .card-title {
+            color: #94a3b8;
+            font-size: 14px;
+            margin-bottom: 12px;
+        }
+
+        .card-value {
+            font-size: 34px;
+            font-weight: bold;
+            color: #ffffff;
+        }
+
+        .card-unit {
+            font-size: 16px;
+            color: #cbd5e1;
+            margin-left: 4px;
+        }
+
+        .charts {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+
+        .chart-card {
+            background: rgba(255, 255, 255, 0.08);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 18px;
+            padding: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+        }
+
+        .chart-title {
+            font-size: 20px;
+            margin-bottom: 15px;
+            color: #ffffff;
+        }
+
+        canvas {
+            width: 100% !important;
+            max-height: 360px;
+        }
+
+        .footer {
+            margin-top: 20px;
+            color: #94a3b8;
+            font-size: 14px;
+            text-align: center;
+        }
+
+        @media (max-width: 600px) {
+            body {
+                padding: 12px;
+            }
+
+            .header h1 {
+                font-size: 24px;
+            }
+
+            .card-value {
+                font-size: 28px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <div>
+                <h1>LoRa BME280 Live Dashboard</h1>
+                <p>Real-time temperature and pressure monitoring via MQTT</p>
+            </div>
+
+            <div class="status-box">
+                <span id="statusDot" class="dot"></span>
+                <span id="statusText">Disconnected</span>
+            </div>
+        </div>
+
+        <div class="cards">
+            <div class="card">
+                <div class="card-title">Temperature</div>
+                <div>
+                    <span id="temperature" class="card-value">--</span>
+                    <span class="card-unit">°C</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Pressure</div>
+                <div>
+                    <span id="pressure" class="card-value">--</span>
+                    <span class="card-unit">Pa</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">RSSI</div>
+                <div>
+                    <span id="rssi" class="card-value">--</span>
+                    <span class="card-unit">dBm</span>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">Packet ID</div>
+                <div>
+                    <span id="packetId" class="card-value">--</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="charts">
+            <div class="chart-card">
+                <div class="chart-title">Temperature Plot</div>
+                <canvas id="temperatureChart"></canvas>
+            </div>
+
+            <div class="chart-card">
+                <div class="chart-title">Pressure Plot</div>
+                <canvas id="pressureChart"></canvas>
+            </div>
+        </div>
+
+        <div class="footer">
+            Last update: <span id="lastUpdate">No data received yet</span>
+        </div>
+    </div>
+
+    <script>
+        // =============================
+        // MQTT CONFIGURATION
+        // =============================
+        const broker = "9acc8f21528441058f9270a906877f63.s1.eu.hivemq.cloud";
+        const port = 8884; // WebSocket SSL port
+        const path = "/mqtt";
+        const topic = "bawantha/lora/bme280";
+
+        const username = "reader";
+        const password = "Reader123";
+
+        const clientId = "dashboard_" + Math.random().toString(16).substring(2, 10);
+
+        const MAX_POINTS = 30;
+
+        // =============================
+        // CHART SETUP
+        // =============================
+        const commonOptions = {
+            responsive: true,
+            animation: false,
+            scales: {
+                x: {
+                    ticks: { color: "#cbd5e1" },
+                    grid: { color: "rgba(255,255,255,0.08)" }
+                },
+                y: {
+                    ticks: { color: "#cbd5e1" },
+                    grid: { color: "rgba(255,255,255,0.08)" }
+                }
+            },
+            plugins: {
+                legend: {
+                    labels: { color: "#e5e7eb" }
+                }
+            }
+        };
+
+        const temperatureChart = new Chart(document.getElementById("temperatureChart"), {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: [{
+                    label: "Temperature (°C)",
+                    data: [],
+                    borderWidth: 2,
+                    tension: 0.35,
+                    fill: false
+                }]
+            },
+            options: commonOptions
+        });
+
+        const pressureChart = new Chart(document.getElementById("pressureChart"), {
+            type: "line",
+            data: {
+                labels: [],
+                datasets: [{
+                    label: "Pressure (Pa)",
+                    data: [],
+                    borderWidth: 2,
+                    tension: 0.35,
+                    fill: false
+                }]
+            },
+            options: commonOptions
+        });
+
+        function addPoint(chart, label, value) {
+            chart.data.labels.push(label);
+            chart.data.datasets[0].data.push(value);
+
+            if (chart.data.labels.length > MAX_POINTS) {
+                chart.data.labels.shift();
+                chart.data.datasets[0].data.shift();
+            }
+
+            chart.update();
+        }
+
+        // =============================
+        // MQTT CONNECTION
+        // =============================
+        const client = new Paho.Client(broker, Number(port), path, clientId);
+
+        client.onConnectionLost = function(responseObject) {
+            setStatus(false);
+            console.log("MQTT connection lost:", responseObject.errorMessage);
+        };
+
+        client.onMessageArrived = function(message) {
+            console.log("MQTT message:", message.payloadString);
+
+            try {
+                const data = JSON.parse(message.payloadString);
+
+                const temperature = Number(data.temperature);
+                const pressure = Number(data.pressure);
+                const rssi = Number(data.rssi);
+                const packetId = data.packet_id;
+
+                document.getElementById("temperature").innerText = temperature.toFixed(2);
+                document.getElementById("pressure").innerText = pressure;
+                document.getElementById("rssi").innerText = rssi;
+                document.getElementById("packetId").innerText = packetId;
+
+                const now = new Date();
+                const timeLabel = now.toLocaleTimeString();
+
+                document.getElementById("lastUpdate").innerText = now.toLocaleString();
+
+                addPoint(temperatureChart, timeLabel, temperature);
+                addPoint(pressureChart, timeLabel, pressure);
+
+            } catch (error) {
+                console.log("Invalid JSON received:", error);
+            }
+        };
+
+        client.connect({
+            useSSL: true,
+            userName: username,
+            password: password,
+            timeout: 10,
+            onSuccess: function() {
+                console.log("MQTT connected");
+                setStatus(true);
+                client.subscribe(topic);
+                console.log("Subscribed to:", topic);
+            },
+            onFailure: function(error) {
+                console.log("MQTT connection failed:", error.errorMessage);
+                setStatus(false);
+            }
+        });
+
+        function setStatus(connected) {
+            const dot = document.getElementById("statusDot");
+            const text = document.getElementById("statusText");
+
+            if (connected) {
+                dot.classList.add("connected");
+                text.innerText = "Connected";
+            } else {
+                dot.classList.remove("connected");
+                text.innerText = "Disconnected";
+            }
+        }
+    </script>
+</body>
+</html>
